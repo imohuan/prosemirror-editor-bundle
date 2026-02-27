@@ -339,6 +339,8 @@ function handleVariableInsert(variable: VariableItem) {
   padding: 16px;
   min-height: 200px;
   margin-bottom: 20px;
+  max-height: 400px;
+  overflow: auto;
 }
 
 .output-section {
