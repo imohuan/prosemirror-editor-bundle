@@ -6,7 +6,7 @@ import { schema as baseSchema } from "prosemirror-schema-basic";
 import { keymap } from "prosemirror-keymap";
 import { baseKeymap } from "prosemirror-commands";
 import { history, undo, redo } from "prosemirror-history";
-import type { ResourceItem, VariableItem } from "./types";
+import type { MenuPosition, ResourceItem, VariableItem } from "./types";
 import { isVideoUrl, getThumbnailUrlFromAssetUrl, loadImageWithThumbnail } from "./utils";
 
 // 拖拽参考线插件配置
@@ -409,7 +409,7 @@ export function useEditor(
 
   // 菜单状态
   const menuVisible = ref(false);
-  const menuPosition = ref({ left: "0px", top: "0px" });
+  const menuPosition = ref<MenuPosition>({ left: "0px", top: "0px", origin: "top left", side: "bottom" });
   const activeIndex = ref(0);
   const mentionQuery = ref("");
   const menuType = ref<"resource" | "variable">("variable"); // 当前激活的分类
