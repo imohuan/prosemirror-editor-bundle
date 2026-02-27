@@ -143,6 +143,15 @@ function createDropCursorPlugin(options: DropCursorOptions = {}) {
 
 
 
+// 全局配置：需要特殊处理的 atom 节点类型
+const ATOM_NODE_TYPES = ["resource", "variable"] as const;
+const ATOM_NODE_CLASSES = ["resource-node", "variable-node"] as const;
+
+// 检查节点是否是 atom 节点
+function isAtomNode(nodeType: string): boolean {
+  return ATOM_NODE_TYPES.includes(nodeType as any);
+}
+
 // Schema 定义
 const mySchema = new Schema({
   nodes: baseSchema.spec.nodes.append({
@@ -151,6 +160,7 @@ const mySchema = new Schema({
       group: "inline",
       inline: true,
       selectable: true,
+      draggable: true,
       atom: true,
       toDOM: (node) => {
         return [
@@ -241,7 +251,7 @@ function createSelectionDecorationPlugin() {
           const decorations: Decoration[] = [];
 
           doc.descendants((node, pos) => {
-            if (node.type.name === "resource" || node.type.name === "variable") {
+            if (isAtomNode(node.type.name)) {
               const nodeFrom = pos;
               const nodeTo = pos + node.nodeSize;
               const isInSelection = selection.from <= nodeFrom && selection.to >= nodeTo;
@@ -272,97 +282,78 @@ function createSelectionDecorationPlugin() {
   });
 }
 
-// 创建光标修复插件：解决 atom 节点前后光标停靠问题
-// 在 atom 节点前后添加零宽度空格，确保光标可以停靠
+// 创建光标修复插件：在特殊情况下插入零宽空格文本节点
+// 只处理：1. 行首/行尾的标签 2. 两个标签相邻的情况
 function createCursorFixPlugin() {
   return new Plugin({
     key: new PluginKey("cursor-fix"),
-    state: {
-      init() {
-        return DecorationSet.empty;
-      },
-      apply(tr, set) {
-        set = set.map(tr.mapping, tr.doc);
+    appendTransaction(transactions, _oldState, newState) {
+      // 只在文档变化时处理
+      if (!transactions.some(tr => tr.docChanged)) {
+        return null;
+      }
 
-        if (tr.docChanged || tr.selectionSet) {
-          const decorations: Decoration[] = [];
-          const doc = tr.doc;
+      const tr = newState.tr;
+      let modified = false;
+      const insertions: { pos: number; text: string }[] = [];
 
-          doc.descendants((node, pos) => {
-            if (node.type.name === "paragraph") {
-              let currentPos = pos + 1;
+      newState.doc.descendants((node, pos) => {
+        if (node.type.name === "paragraph") {
+          let currentPos = pos + 1;
 
-              for (let i = 0; i < node.childCount; i++) {
-                const child = node.child(i);
-                const childEnd = currentPos + child.nodeSize;
+          for (let i = 0; i < node.childCount; i++) {
+            const child = node.child(i);
+            const childEnd = currentPos + child.nodeSize;
 
-                if (child.type.name === "resource" || child.type.name === "variable") {
-                  // 检查前面的节点
-                  const prevChild = i > 0 ? node.child(i - 1) : null;
+            // 使用全局配置检查是否是 atom 节点
+            if (isAtomNode(child.type.name)) {
+              const prevChild = i > 0 ? node.child(i - 1) : null;
+              const nextChild = i < node.childCount - 1 ? node.child(i + 1) : null;
 
-                  // 需要在前面添加占位符的情况：
-                  // 1. 段落开头（没有前置节点）
-                  // 2. 前面是空白文本
-                  // 3. 前面也是 resource/variable 节点（标签相邻）
-                  const needsBeforeWidget = !prevChild ||
-                    (prevChild.isText && (!prevChild.text || prevChild.text.trim() === "")) ||
-                    (prevChild.type.name === "resource" || prevChild.type.name === "variable");
-
-                  if (needsBeforeWidget) {
-                    decorations.push(
-                      Decoration.widget(currentPos, () => {
-                        const span = document.createElement("span");
-                        span.className = "cursor-widget-before";
-                        span.style.display = "inline";
-                        span.style.width = "0";
-                        span.contentEditable = "true";
-                        span.textContent = "\u200B";
-                        return span;
-                      }, { side: -1 }) // side: -1 表示在节点左侧
-                    );
-                  }
-
-                  // 检查后面的节点
-                  const nextChild = i < node.childCount - 1 ? node.child(i + 1) : null;
-
-                  // 需要在后面添加占位符的情况：
-                  // 1. 段落结尾（没有后续节点）
-                  // 2. 后面是空白文本
-                  // 3. 后面也是 resource/variable 节点（标签相邻）
-                  const needsAfterWidget = !nextChild ||
-                    (nextChild.isText && (!nextChild.text || nextChild.text.trim() === "")) ||
-                    (nextChild.type.name === "resource" || nextChild.type.name === "variable");
-
-                  if (needsAfterWidget) {
-                    decorations.push(
-                      Decoration.widget(childEnd, () => {
-                        const span = document.createElement("span");
-                        span.className = "cursor-widget-after";
-                        span.style.display = "inline";
-                        span.style.width = "0";
-                        span.contentEditable = "true";
-                        span.textContent = "\u200B";
-                        return span;
-                      }, { side: 1 }) // side: 1 表示在节点右侧
-                    );
-                  }
+              // 检查前面是否需要插入零宽空格
+              // 情况1：标签在行首
+              // 情况2：前面是另一个标签
+              if (!prevChild) {
+                // 行首，直接插入
+                insertions.push({ pos: currentPos, text: "\u200B" });
+              } else if (isAtomNode(prevChild.type.name)) {
+                // 前面是标签，检查中间是否已有零宽空格
+                const hasSpacer = prevChild.isText && prevChild.text === "\u200B";
+                if (!hasSpacer) {
+                  insertions.push({ pos: currentPos, text: "\u200B" });
                 }
+              }
 
-                currentPos = childEnd;
+              // 检查后面是否需要插入零宽空格
+              // 情况1：标签在行尾
+              // 情况2：后面是另一个标签
+              if (!nextChild) {
+                // 行尾，直接插入
+                insertions.push({ pos: childEnd, text: "\u200B" });
+              } else if (isAtomNode(nextChild.type.name)) {
+                // 后面是标签，检查中间是否已有零宽空格
+                const hasSpacer = nextChild.isText && nextChild.text === "\u200B";
+                if (!hasSpacer) {
+                  insertions.push({ pos: childEnd, text: "\u200B" });
+                }
               }
             }
-          });
 
-          return DecorationSet.create(doc, decorations);
+            currentPos = childEnd;
+          }
         }
+      });
 
-        return set;
-      },
-    },
-    props: {
-      decorations(state) {
-        return this.getState(state);
-      },
+      // 按位置从后往前插入，避免位置偏移
+      if (insertions.length > 0) {
+        insertions.sort((a, b) => b.pos - a.pos);
+        insertions.forEach(({ pos, text }) => {
+          tr.insert(pos, newState.schema.text(text));
+          modified = true;
+        });
+      }
+
+      return modified ? tr : null;
     },
   });
 }
@@ -669,38 +660,45 @@ export function useEditor(
   // 存储资源节点图片的取消加载函数
   const resourceCleanupMap = new WeakMap<HTMLImageElement, () => void>();
 
-  // 绑定资源节点事件
+  // 绑定 atom 节点事件（资源和变量）
   function bindResourceEvents() {
-    const resourceNodes = document.querySelectorAll(".resource-node");
-    resourceNodes.forEach((node) => {
+    // 查询所有 atom 节点
+    const selector = ATOM_NODE_CLASSES.map(cls => `.${cls}`).join(", ");
+    const atomNodes = document.querySelectorAll(selector);
+
+    atomNodes.forEach((node) => {
       const el = node as HTMLElement;
-      el.onmouseenter = () => handleResourceMouseEnter(el);
-      el.onmouseleave = handleResourceMouseLeave;
-      el.onclick = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        handleResourceClick(el);
-      };
 
-      // 处理缩略图加载
-      const img = el.querySelector("img");
-      if (img) {
-        const assetUrl = el.getAttribute("data-url") || "";
-        const assetName = el.getAttribute("data-name") || "";
-        const assetId = el.getAttribute("data-id") || "";
-
-        // 清理之前的加载
-        const oldCleanup = resourceCleanupMap.get(img);
-        if (oldCleanup) oldCleanup();
-
-        // 使用新的加载方式
-        const resourceItem: ResourceItem = {
-          id: assetId,
-          url: assetUrl,
-          name: assetName,
+      // 只为资源节点绑定鼠标事件（变量节点不需要预览）
+      if (el.classList.contains("resource-node")) {
+        el.onmouseenter = () => handleResourceMouseEnter(el);
+        el.onmouseleave = handleResourceMouseLeave;
+        el.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          handleResourceClick(el);
         };
-        const cleanup = loadImageWithThumbnail(img, resourceItem, true);
-        resourceCleanupMap.set(img, cleanup);
+
+        // 处理缩略图加载
+        const img = el.querySelector("img");
+        if (img) {
+          const assetUrl = el.getAttribute("data-url") || "";
+          const assetName = el.getAttribute("data-name") || "";
+          const assetId = el.getAttribute("data-id") || "";
+
+          // 清理之前的加载
+          const oldCleanup = resourceCleanupMap.get(img);
+          if (oldCleanup) oldCleanup();
+
+          // 使用新的加载方式
+          const resourceItem: ResourceItem = {
+            id: assetId,
+            url: assetUrl,
+            name: assetName,
+          };
+          const cleanup = loadImageWithThumbnail(img, resourceItem, true);
+          resourceCleanupMap.set(img, cleanup);
+        }
       }
     });
   }
