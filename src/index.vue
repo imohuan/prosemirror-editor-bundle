@@ -78,6 +78,8 @@ const {
   fullscreenType,
   closeFullscreen,
   exportText,
+  serializeDoc,
+  deserializeDoc,
 } = useEditor(editorRef, {
   modelValue: modelValueRef,
   resources: resourcesRef,
@@ -87,6 +89,8 @@ const {
 // 暴露导出方法给父组件
 defineExpose({
   exportText,
+  serializeDoc,
+  deserializeDoc,
 });
 </script>
 

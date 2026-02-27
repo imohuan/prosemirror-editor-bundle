@@ -470,6 +470,25 @@ export function useEditor(
     return text.trim();
   }
 
+  // 序列化文档结构为 JSON
+  function serializeDoc(): any {
+    if (!view) return null;
+    return view.state.doc.toJSON();
+  }
+
+  // 从 JSON 恢复文档结构
+  function deserializeDoc(docJson: any) {
+    if (!view || !docJson) return;
+    try {
+      const doc = mySchema.nodeFromJSON(docJson);
+      const tr = view.state.tr.replaceWith(0, view.state.doc.content.size, doc.content);
+      view.dispatch(tr);
+      emit("update:modelValue", getPlainText());
+    } catch (error) {
+      console.error("反序列化文档失败:", error);
+    }
+  }
+
   // 显示菜单
   function showMenu(coords: { left: number; top: number; bottom: number; right: number }, type: "resource" | "variable" = "variable") {
     menuType.value = type;
@@ -1015,5 +1034,7 @@ export function useEditor(
     closeFullscreen,
     // 导出方法
     exportText,
+    serializeDoc,
+    deserializeDoc,
   };
 }

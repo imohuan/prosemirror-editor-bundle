@@ -11,6 +11,7 @@
         <div class="section-header">
           <h2>编辑器</h2>
           <div class="actions">
+            <button @click="saveContent" class="btn-success">保存内容</button>
             <button @click="exportContent" class="btn-primary">导出文本</button>
             <button @click="clearContent" class="btn-secondary">清空</button>
           </div>
@@ -36,6 +37,23 @@
           <div class="output-box" v-if="exportedText">
             <h3>导出内容（变量已替换）</h3>
             <pre>{{ exportedText }}</pre>
+          </div>
+
+          <!-- 保存的数据预览 -->
+          <div class="output-box saved-data-box" v-if="showSavedData">
+            <div class="saved-data-header">
+              <h3>保存的数据（JSON格式）</h3>
+              <div class="saved-data-actions">
+                <button @click="copySavedData" class="btn-copy">复制</button>
+                <button @click="showSavedData = false" class="btn-close">关闭</button>
+              </div>
+            </div>
+            <textarea 
+              v-model="savedData" 
+              class="saved-data-textarea"
+              placeholder="粘贴保存的JSON数据到这里..."
+            ></textarea>
+            <button @click="loadContent" class="btn-load">导入数据</button>
           </div>
         </div>
       </div>
@@ -116,6 +134,8 @@ import type { ResourceItem, VariableItem } from '../src/types';
 const editorRef = ref<InstanceType<typeof ProseMirrorEditor> | null>(null);
 const content = ref('你好，我是 ，今年 ，来自 ');
 const exportedText = ref('');
+const savedData = ref('');
+const showSavedData = ref(false);
 
 // 默认变量数据
 const defaultVariables: VariableItem[] = [
@@ -199,6 +219,53 @@ function exportContent() {
 function clearContent() {
   content.value = '';
   exportedText.value = '';
+}
+
+// 保存编辑器内容（包含结构）
+function saveContent() {
+  if (!editorRef.value) return;
+  
+  const data = {
+    doc: editorRef.value.serializeDoc(), // 保存完整的文档结构
+    variables: variables.value,
+    resources: resources.value,
+    timestamp: new Date().toISOString(),
+  };
+  savedData.value = JSON.stringify(data, null, 2);
+  showSavedData.value = true;
+  console.log('已保存内容:', data);
+}
+
+// 导入编辑器内容
+function loadContent() {
+  if (!editorRef.value) return;
+  
+  try {
+    const data = JSON.parse(savedData.value);
+    
+    // 先恢复变量和资源配置
+    variables.value = data.variables || [];
+    resources.value = data.resources || [];
+    
+    // 等待下一个 tick 后恢复文档结构
+    setTimeout(() => {
+      if (editorRef.value && data.doc) {
+        editorRef.value.deserializeDoc(data.doc);
+      }
+      exportedText.value = '';
+      console.log('已导入内容:', data);
+    }, 100);
+  } catch (error) {
+    alert('导入失败：数据格式错误');
+    console.error('导入错误:', error);
+  }
+}
+
+// 复制保存的数据
+function copySavedData() {
+  navigator.clipboard.writeText(savedData.value).then(() => {
+    alert('已复制到剪贴板');
+  });
 }
 
 function handleResourceInsert(resource: ResourceItem) {
@@ -456,6 +523,110 @@ function handleVariableInsert(variable: VariableItem) {
 .btn-add:hover {
   background: #e5e7eb;
   border-color: #9ca3af;
+}
+
+.btn-success {
+  padding: 8px 16px;
+  background: #10b981;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: background 0.2s;
+}
+
+.btn-success:hover {
+  background: #059669;
+}
+
+.btn-copy {
+  padding: 4px 12px;
+  background: #3b82f6;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.2s;
+}
+
+.btn-copy:hover {
+  background: #2563eb;
+}
+
+.btn-close {
+  padding: 4px 12px;
+  background: #6b7280;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.2s;
+}
+
+.btn-close:hover {
+  background: #4b5563;
+}
+
+.btn-load {
+  width: 100%;
+  padding: 10px;
+  background: #2563eb;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  margin-top: 12px;
+  transition: background 0.2s;
+}
+
+.btn-load:hover {
+  background: #1d4ed8;
+}
+
+/* 保存数据区域 */
+.saved-data-box {
+  background: #f0f9ff;
+  border: 2px solid #3b82f6;
+}
+
+.saved-data-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.saved-data-header h3 {
+  margin: 0;
+}
+
+.saved-data-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.saved-data-textarea {
+  width: 100%;
+  min-height: 200px;
+  padding: 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  resize: vertical;
+  background: white;
+}
+
+.saved-data-textarea:focus {
+  outline: none;
+  border-color: #3b82f6;
 }
 
 /* 响应式 */
