@@ -7,6 +7,11 @@
   color: #111;
 }
 
+.prose-mirror-editor .ProseMirror p {
+  padding: 0px;
+  margin: 0px;
+}
+
 /* 变量标签基础样式 */
 .prose-mirror-editor .variable-node {
   display: inline-block;
