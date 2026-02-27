@@ -2,13 +2,15 @@
   <div class="prose-mirror-editor">
     <div ref="editorRef"></div>
 
-    <!-- 资源选择菜单 -->
+    <!-- 资源/变量选择菜单 -->
     <MentionMenu
       :visible="menuVisible"
       :resources="filteredResources"
+      :variables="filteredVariables"
+      :menu-type="menuType"
       :position="menuPosition"
       :active-index="activeIndex"
-      @select="insertSelectedItem"
+      @select="(item) => insertSelectedItem(item)"
       @hover="handleMenuHover"
     />
 
@@ -37,28 +39,33 @@ import { useEditor } from './useEditor';
 import MentionMenu from './MentionMenu.vue';
 import PreviewBox from './PreviewBox.vue';
 import FullscreenPreview from './FullscreenPreview.vue';
-import type { ResourceItem } from './types';
+import type { ResourceItem, VariableItem } from './types';
 
 const props = defineProps<{
   modelValue?: string;
   resources?: ResourceItem[];
+  variables?: VariableItem[];
   placeholder?: string;
 }>();
 
 const emit = defineEmits<{
   'update:modelValue': [value: string];
   'resource-insert': [resource: ResourceItem];
+  'variable-insert': [variable: VariableItem];
 }>();
 
 const editorRef = ref<HTMLElement | null>(null);
 const modelValueRef = toRef(props, 'modelValue');
 const resourcesRef = toRef(props, 'resources');
+const variablesRef = toRef(props, 'variables');
 
 const {
   menuVisible,
   menuPosition,
   activeIndex,
+  menuType,
   filteredResources,
+  filteredVariables,
   insertSelectedItem,
   handleMenuHover,
   previewVisible,
@@ -70,10 +77,17 @@ const {
   fullscreenUrl,
   fullscreenType,
   closeFullscreen,
+  exportText,
 } = useEditor(editorRef, {
   modelValue: modelValueRef,
   resources: resourcesRef,
+  variables: variablesRef,
 }, emit);
+
+// 暴露导出方法给父组件
+defineExpose({
+  exportText,
+});
 </script>
 
 <style>

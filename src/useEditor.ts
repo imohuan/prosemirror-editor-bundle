@@ -6,7 +6,7 @@ import { schema as baseSchema } from "prosemirror-schema-basic";
 import { keymap } from "prosemirror-keymap";
 import { baseKeymap } from "prosemirror-commands";
 import { history, undo, redo } from "prosemirror-history";
-import type { ResourceItem } from "./types";
+import type { ResourceItem, VariableItem } from "./types";
 import { isVideoUrl, getThumbnailUrlFromAssetUrl, loadImageWithThumbnail } from "./utils";
 
 // 拖拽参考线插件配置
@@ -146,6 +146,40 @@ function createDropCursorPlugin(options: DropCursorOptions = {}) {
 // Schema 定义
 const mySchema = new Schema({
   nodes: baseSchema.spec.nodes.append({
+    variable: {
+      attrs: { id: {}, name: {}, value: {} },
+      group: "inline",
+      inline: true,
+      selectable: true,
+      atom: true,
+      toDOM: (node) => {
+        return [
+          "span",
+          {
+            class: "variable-node",
+            "data-id": node.attrs.id,
+            "data-name": node.attrs.name,
+            "data-value": node.attrs.value,
+          },
+          `@${node.attrs.name}`,
+          // 添加零宽度空格作为光标锚点，解决 atom 节点在行尾时光标跳动问题
+          ["span", { class: "cursor-anchor" }, "\u200B"],
+        ];
+      },
+      parseDOM: [
+        {
+          tag: "span.variable-node",
+          getAttrs: (dom) => {
+            const el = dom as HTMLElement;
+            return {
+              id: el.getAttribute("data-id") || "",
+              name: el.getAttribute("data-name") || "",
+              value: el.getAttribute("data-value") || "",
+            };
+          },
+        },
+      ],
+    },
     resource: {
       attrs: { id: {}, url: {}, name: {}, thumbnail_url: { default: "" } },
       group: "inline",
@@ -211,16 +245,17 @@ function createSelectionDecorationPlugin() {
           const decorations: Decoration[] = [];
 
           doc.descendants((node, pos) => {
-            if (node.type.name === "resource") {
+            if (node.type.name === "resource" || node.type.name === "variable") {
               const nodeFrom = pos;
               const nodeTo = pos + node.nodeSize;
               const isInSelection = selection.from <= nodeFrom && selection.to >= nodeTo;
               const isNodeSelection = (selection as any).node && selection.from === nodeFrom;
 
               if (isInSelection || isNodeSelection) {
+                const className = node.type.name === "resource" ? "resource-node-selected" : "variable-node-selected";
                 decorations.push(
                   Decoration.node(nodeFrom, nodeTo, {
-                    class: "resource-node-selected",
+                    class: className,
                   }),
                 );
               }
@@ -267,7 +302,7 @@ function createCursorFixPlugin() {
                 const child = node.child(i);
                 const childEnd = currentPos + child.nodeSize;
 
-                if (child.type.name === "resource") {
+                if (child.type.name === "resource" || child.type.name === "variable") {
                   lastResourceEndPos = childEnd;
                 } else if (child.isText && child.text && child.text.replace(/\s/g, "").length > 0) {
                   // 有实际内容的文本节点，重置
@@ -277,7 +312,7 @@ function createCursorFixPlugin() {
                 currentPos = childEnd;
               }
 
-              // 如果段落以 resource 结尾（后面没有实际内容）
+              // 如果段落以 resource 或 variable 结尾（后面没有实际内容）
               if (lastResourceEndPos >= 0) {
                 // 在 resource 后面添加一个 widget 作为光标占位符
                 decorations.push(
@@ -338,10 +373,12 @@ export function useEditor(
   props: {
     modelValue?: Ref<string | undefined>;
     resources?: Ref<ResourceItem[] | undefined>;
+    variables?: Ref<VariableItem[] | undefined>;
   },
   emit: {
     (e: "update:modelValue", value: string): void;
     (e: "resource-insert", resource: ResourceItem): void;
+    (e: "variable-insert", variable: VariableItem): void;
   },
 ) {
   let view: EditorView | null = null;
@@ -352,6 +389,7 @@ export function useEditor(
   const menuPosition = ref({ left: "0px", top: "0px" });
   const activeIndex = ref(0);
   const mentionQuery = ref("");
+  const menuType = ref<"resource" | "variable">("variable"); // 当前激活的分类
 
   // 预览状态
   const previewVisible = ref(false);
@@ -368,8 +406,9 @@ export function useEditor(
   // 计时器
   let hoverTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // 过滤后的资源
+  // 过滤后的资源和变量
   const filteredResources = ref<ResourceItem[]>([]);
+  const filteredVariables = ref<VariableItem[]>([]);
 
   // 获取纯文本
   function getPlainText(): string {
@@ -378,6 +417,8 @@ export function useEditor(
     view.state.doc.descendants((node) => {
       if (node.type.name === "resource") {
         text += `@${node.attrs.name} `;
+      } else if (node.type.name === "variable") {
+        text += `@${node.attrs.name}`;
       } else if (node.isText) {
         // 过滤掉零宽空格（用于修复光标问题）
         text += node.text?.replace(/\u200B/g, "") || "";
@@ -388,13 +429,63 @@ export function useEditor(
     return text.trim();
   }
 
+  // 导出文本，将变量替换为真实值
+  function exportText(): string {
+    if (!view) return "";
+    let text = "";
+    view.state.doc.descendants((node) => {
+      if (node.type.name === "resource") {
+        text += `@${node.attrs.name} `;
+      } else if (node.type.name === "variable") {
+        text += node.attrs.value;
+      } else if (node.isText) {
+        text += node.text?.replace(/\u200B/g, "") || "";
+      } else if (node.isBlock && text.length > 0) {
+        text += "\n";
+      }
+    });
+    return text.trim();
+  }
+
   // 显示菜单
-  function showMenu(coords: { left: number; bottom: number }) {
+  function showMenu(coords: { left: number; top: number; bottom: number; right: number }, type: "resource" | "variable" = "variable") {
+    menuType.value = type;
+    // 同时显示变量和资源
+    filteredVariables.value = unref(props.variables) || [];
     filteredResources.value = unref(props.resources) || [];
+
     menuVisible.value = true;
+
+    // 计算菜单位置，确保不超出视口
+    const menuWidth = 200;
+    const menuMaxHeight = 280;
+    const gap = 4;
+
+    let left = coords.left;
+    let top = coords.bottom + gap;
+
+    // 检查右边界
+    if (left + menuWidth > window.innerWidth) {
+      left = window.innerWidth - menuWidth - 10;
+    }
+
+    // 检查左边界
+    if (left < 10) {
+      left = 10;
+    }
+
+    // 检查底部边界，如果空间不足则显示在上方
+    if (top + menuMaxHeight > window.innerHeight) {
+      top = coords.top - menuMaxHeight - gap;
+      // 如果上方也不够，则显示在底部但调整高度
+      if (top < 10) {
+        top = coords.bottom + gap;
+      }
+    }
+
     menuPosition.value = {
-      left: `${coords.left}px`,
-      top: `${coords.bottom + window.scrollY + 4}px`,
+      left: `${left}px`,
+      top: `${top}px`,
     };
     activeIndex.value = 0;
   }
@@ -404,36 +495,64 @@ export function useEditor(
     menuVisible.value = false;
     mentionQuery.value = "";
     filteredResources.value = [];
+    filteredVariables.value = [];
   }
 
   // 插入选中的资源
-  function insertSelectedItem(item: ResourceItem) {
+  function insertSelectedItem(item: ResourceItem | VariableItem) {
     if (!view) return;
     const { from } = view.state.selection;
-    // 使用统一的缩略图计算逻辑
-    const thumbnailUrl = item.thumbnail_url || getThumbnailUrlFromAssetUrl(item.url, item.type);
-    const resourceNode = mySchema.nodes.resource;
-    if (!resourceNode) return;
-    const tr = view.state.tr.replaceWith(
-      from - 1 - mentionQuery.value.length,
-      from,
-      resourceNode.create({
-        id: item.id,
-        url: item.url,
-        name: item.name,
-        thumbnail_url: thumbnailUrl,
-      }),
-    );
-    tr.insertText(" ");
-    view.dispatch(tr);
+
+    if (menuType.value === "resource") {
+      const resourceItem = item as ResourceItem;
+      const thumbnailUrl = resourceItem.thumbnail_url || getThumbnailUrlFromAssetUrl(resourceItem.url, resourceItem.type);
+      const resourceNode = mySchema.nodes.resource;
+      if (!resourceNode) return;
+      const tr = view.state.tr.replaceWith(
+        from - 1 - mentionQuery.value.length,
+        from,
+        resourceNode.create({
+          id: resourceItem.id,
+          url: resourceItem.url,
+          name: resourceItem.name,
+          thumbnail_url: thumbnailUrl,
+        }),
+      );
+      tr.insertText(" ");
+      view.dispatch(tr);
+      emit("resource-insert", resourceItem);
+    } else {
+      const variableItem = item as VariableItem;
+      const variableNode = mySchema.nodes.variable;
+      if (!variableNode) return;
+      const tr = view.state.tr.replaceWith(
+        from - 1 - mentionQuery.value.length,
+        from,
+        variableNode.create({
+          id: variableItem.id,
+          name: variableItem.name,
+          value: variableItem.value,
+        }),
+      );
+      view.dispatch(tr);
+      emit("variable-insert", variableItem);
+    }
+
     hideMenu();
     view.focus();
-    emit("resource-insert", item);
   }
 
   // 处理菜单悬停
-  function handleMenuHover(index: number) {
+  function handleMenuHover(index: number, type: "resource" | "variable") {
     activeIndex.value = index;
+    menuType.value = type;
+  }
+
+  // 处理菜单类型切换（已废弃，保留接口兼容性）
+  function handleMenuTypeSwitch(type: "resource" | "variable") {
+    // 不再需要切换，只更新当前激活的类型
+    menuType.value = type;
+    activeIndex.value = 0;
   }
 
   // 处理资源节点鼠标进入
@@ -544,11 +663,11 @@ export function useEditor(
         const assetUrl = el.getAttribute("data-url") || "";
         const assetName = el.getAttribute("data-name") || "";
         const assetId = el.getAttribute("data-id") || "";
-        
+
         // 清理之前的加载
         const oldCleanup = resourceCleanupMap.get(img);
         if (oldCleanup) oldCleanup();
-        
+
         // 使用新的加载方式
         const resourceItem: ResourceItem = {
           id: assetId,
@@ -564,25 +683,74 @@ export function useEditor(
   // 键盘上移
   function moveUp() {
     if (!menuVisible.value) return false;
-    activeIndex.value = (activeIndex.value - 1 + filteredResources.value.length) % filteredResources.value.length;
+
+    const variablesCount = filteredVariables.value.length;
+    const resourcesCount = filteredResources.value.length;
+    const totalCount = variablesCount + resourcesCount;
+
+    if (totalCount === 0) return false;
+
+    // 计算当前全局索引
+    let currentGlobalIndex = menuType.value === "variable"
+      ? activeIndex.value
+      : variablesCount + activeIndex.value;
+
+    // 向上移动
+    currentGlobalIndex = (currentGlobalIndex - 1 + totalCount) % totalCount;
+
+    // 更新类型和索引
+    if (currentGlobalIndex < variablesCount) {
+      menuType.value = "variable";
+      activeIndex.value = currentGlobalIndex;
+    } else {
+      menuType.value = "resource";
+      activeIndex.value = currentGlobalIndex - variablesCount;
+    }
+
     return true;
   }
 
   // 键盘下移
   function moveDown() {
     if (!menuVisible.value) return false;
-    activeIndex.value = (activeIndex.value + 1) % filteredResources.value.length;
+
+    const variablesCount = filteredVariables.value.length;
+    const resourcesCount = filteredResources.value.length;
+    const totalCount = variablesCount + resourcesCount;
+
+    if (totalCount === 0) return false;
+
+    // 计算当前全局索引
+    let currentGlobalIndex = menuType.value === "variable"
+      ? activeIndex.value
+      : variablesCount + activeIndex.value;
+
+    // 向下移动
+    currentGlobalIndex = (currentGlobalIndex + 1) % totalCount;
+
+    // 更新类型和索引
+    if (currentGlobalIndex < variablesCount) {
+      menuType.value = "variable";
+      activeIndex.value = currentGlobalIndex;
+    } else {
+      menuType.value = "resource";
+      activeIndex.value = currentGlobalIndex - variablesCount;
+    }
+
     return true;
   }
 
   // 键盘确认
   function handleEnter() {
-    if (menuVisible.value && filteredResources.value.length > 0) {
-      const item = filteredResources.value[activeIndex.value];
+    if (menuVisible.value) {
+      const item = menuType.value === "variable"
+        ? filteredVariables.value[activeIndex.value]
+        : filteredResources.value[activeIndex.value];
+
       if (item) {
         insertSelectedItem(item);
+        return true;
       }
-      return true;
     }
     return false;
   }
@@ -655,15 +823,40 @@ export function useEditor(
             if (textBefore && textBefore.endsWith("@")) {
               mentionQuery.value = "";
               const coords = view.coordsAtPos(sel.from);
-              showMenu({ left: coords.left, bottom: coords.bottom });
+              // 同时显示变量和资源
+              const allVariables = unref(props.variables) || [];
+              const allResources = unref(props.resources) || [];
+
+              if (allVariables.length > 0 || allResources.length > 0) {
+                // 优先激活变量分类
+                showMenu({ left: coords.left, bottom: coords.bottom }, allVariables.length > 0 ? "variable" : "resource");
+              }
             } else if (textBefore) {
               const atIndex = textBefore.lastIndexOf("@");
               if (atIndex !== -1) {
                 mentionQuery.value = textBefore.slice(atIndex + 1);
-                const allResources = unref(props.resources) || [];
-                filteredResources.value = allResources.filter((r) => r.name.toLowerCase().includes(mentionQuery.value.toLowerCase()));
                 const coords = view.coordsAtPos(sel.from);
-                showMenu({ left: coords.left, bottom: coords.bottom });
+
+                // 同时搜索变量和资源
+                const allVariables = unref(props.variables) || [];
+                const allResources = unref(props.resources) || [];
+                const matchedVariables = allVariables.filter((v) => v.name.toLowerCase().includes(mentionQuery.value.toLowerCase()));
+                const matchedResources = allResources.filter((r) => r.name.toLowerCase().includes(mentionQuery.value.toLowerCase()));
+
+                filteredVariables.value = matchedVariables;
+                filteredResources.value = matchedResources;
+
+                if (matchedVariables.length > 0 || matchedResources.length > 0) {
+                  // 优先激活有匹配结果的分类
+                  showMenu({ left: coords.left, bottom: coords.bottom }, matchedVariables.length > 0 ? "variable" : "resource");
+                } else if (allVariables.length > 0 || allResources.length > 0) {
+                  // 如果都没有匹配，显示所有项
+                  filteredVariables.value = allVariables;
+                  filteredResources.value = allResources;
+                  showMenu({ left: coords.left, bottom: coords.bottom }, allVariables.length > 0 ? "variable" : "resource");
+                } else {
+                  hideMenu();
+                }
               } else {
                 hideMenu();
               }
@@ -682,6 +875,8 @@ export function useEditor(
         slice.content.forEach((node) => {
           if (node.type.name === "resource") {
             text += `@${node.attrs.name} `;
+          } else if (node.type.name === "variable") {
+            text += `@${node.attrs.name}`;
           } else if (node.isText) {
             // 过滤掉零宽空格
             text += node.text?.replace(/\u200B/g, "") || "";
@@ -748,14 +943,32 @@ export function useEditor(
     { deep: true },
   );
 
+  // 监听 variables 变化，更新过滤列表
+  watch(
+    () => unref(props.variables),
+    (newVariables) => {
+      if (menuVisible.value && newVariables) {
+        if (mentionQuery.value) {
+          filteredVariables.value = newVariables.filter((v) => v.name.toLowerCase().includes(mentionQuery.value.toLowerCase()));
+        } else {
+          filteredVariables.value = newVariables;
+        }
+      }
+    },
+    { deep: true },
+  );
+
   return {
     // 菜单
     menuVisible,
     menuPosition,
     activeIndex,
+    menuType,
     filteredResources,
+    filteredVariables,
     insertSelectedItem,
     handleMenuHover,
+    handleMenuTypeSwitch,
     // 预览
     previewVisible,
     previewUrl,
@@ -767,5 +980,7 @@ export function useEditor(
     fullscreenUrl,
     fullscreenType,
     closeFullscreen,
+    // 导出方法
+    exportText,
   };
 }

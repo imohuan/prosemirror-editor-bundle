@@ -23,6 +23,28 @@
   height: 24px; /* 明确设置容器高度 */
   border-bottom: 1px solid #111;
 }
+
+/* 变量标签基础样式 */
+.prose-mirror-editor .variable-node {
+  display: inline;
+  padding: 2px 6px;
+  background-color: #eff6ff;
+  color: #2563eb;
+  font-weight: 500;
+  cursor: default;
+  user-select: none;
+  vertical-align: baseline;
+  font-size: 0.95em;
+  position: relative;
+}
+
+/* 变量节点的光标锚点 */
+.prose-mirror-editor .variable-node .cursor-anchor {
+  display: inline;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
 .prose-mirror-editor .resource-node img {
   width: 18px;
   height: 18px;
@@ -93,6 +115,15 @@
   color: #ffffff !important;
 }
 
+/* 变量节点选中样式 */
+.prose-mirror-editor .ProseMirror-selectednode.variable-node,
+.prose-mirror-editor .variable-node-selected {
+  background-color: #2563eb !important;
+  color: #ffffff !important;
+  border-color: #1d4ed8 !important;
+  outline: none;
+}
+
 /* 2. 处理原生拖拽选中时的背景覆盖 */
 .prose-mirror-editor .ProseMirror ::selection {
   background-color: #2b6df2 !important;
@@ -115,7 +146,41 @@
   width: 200px;
   padding: 6px;
   max-height: 280px;
+  overflow: hidden;
+}
+
+/* 自定义滚动条样式 */
+.mention-menu .menu-content {
+  max-height: 280px;
   overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 2px;
+}
+
+/* Firefox 滚动条 */
+.mention-menu .menu-content {
+  scrollbar-width: thin;
+  scrollbar-color: #d1d5db transparent;
+}
+
+/* Webkit 滚动条 (Chrome, Safari, Edge) */
+.mention-menu .menu-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.mention-menu .menu-content::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 3px;
+}
+
+.mention-menu .menu-content::-webkit-scrollbar-thumb {
+  background-color: #d1d5db;
+  border-radius: 3px;
+  transition: background-color 0.2s ease;
+}
+
+.mention-menu .menu-content::-webkit-scrollbar-thumb:hover {
+  background-color: #9ca3af;
 }
 
 .mention-menu .menu-item {
@@ -156,6 +221,30 @@
 
 .mention-menu .menu-item.active span {
   color: #2b6df2;
+}
+
+/* 变量菜单项样式 */
+.mention-menu .variable-item {
+  gap: 8px;
+}
+
+.mention-menu .variable-item .variable-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background-color: #eff6ff;
+  color: #2563eb;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.mention-menu .variable-item.active .variable-icon {
+  background-color: #2563eb;
+  color: #ffffff;
 }
 
 /* 预览框样式 */

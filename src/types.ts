@@ -6,6 +6,12 @@ export interface ResourceItem {
   type?: 'image' | 'video' | 'audio';
 }
 
+export interface VariableItem {
+  id: string;
+  name: string;
+  value: string;
+}
+
 export interface MenuPosition {
   left: string;
   top: string;
