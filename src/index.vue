@@ -10,7 +10,7 @@
       :menu-type="menuType"
       :position="menuPosition"
       :active-index="activeIndex"
-      @select="(item) => insertSelectedItem(item)"
+      @select="insertSelectedItem"
       @hover="handleMenuHover"
     />
 

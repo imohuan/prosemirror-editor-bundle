@@ -10,15 +10,22 @@
 /* 变量标签基础样式 */
 .prose-mirror-editor .variable-node {
   display: inline;
-  padding: 2px 6px;
-  background-color: #eff6ff;
-  color: #2563eb;
-  font-weight: 500;
+  padding: 0 4px !important;
   cursor: default;
   user-select: none;
   vertical-align: baseline;
   font-size: 0.95em;
   position: relative;
+}
+
+/* 变量标签内层样式 - 提供背景和圆角 */
+.prose-mirror-editor .variable-node-inner {
+  display: inline;
+  padding: 2px 6px;
+  background-color: #eff6ff;
+  color: #2563eb;
+  font-weight: 500;
+  border-radius: 4px;
 }
 
 /* 使用 CSS 伪元素创建光标停靠点 - 这是浏览器原生支持的方式 */
@@ -128,11 +135,19 @@
 }
 
 /* 变量节点选中样式 */
-.prose-mirror-editor .ProseMirror-selectednode.variable-node,
+.prose-mirror-editor
+  .ProseMirror-selectednode.variable-node
+  .variable-node-inner,
 .prose-mirror-editor .variable-node-selected {
   background-color: #2563eb !important;
   color: #ffffff !important;
-  border-color: #1d4ed8 !important;
+  outline: none;
+  height: 24px !important;
+}
+
+.prose-mirror-editor .variable-node-selected .variable-node-inner {
+  background-color: unset;
+  color: #ffffff !important;
   outline: none;
 }
 

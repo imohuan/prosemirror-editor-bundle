@@ -170,8 +170,15 @@ const mySchema = new Schema({
             "data-id": node.attrs.id,
             "data-name": node.attrs.name,
             "data-value": node.attrs.value,
+            style: "padding: 0 2px;",
           },
-          `@${node.attrs.name}`,
+          [
+            "span",
+            {
+              class: "variable-node-inner",
+            },
+            `@${node.attrs.name}`,
+          ],
         ];
       },
       parseDOM: [
@@ -515,11 +522,14 @@ export function useEditor(
   }
 
   // 插入选中的资源
-  function insertSelectedItem(item: ResourceItem | VariableItem) {
+  function insertSelectedItem(item: ResourceItem | VariableItem, type?: "resource" | "variable") {
     if (!view) return;
     const { from } = view.state.selection;
 
-    if (menuType.value === "resource") {
+    // 使用传入的 type 参数，如果没有则使用 menuType.value
+    const itemType = type || menuType.value;
+
+    if (itemType === "resource") {
       const resourceItem = item as ResourceItem;
       const thumbnailUrl = resourceItem.thumbnail_url || getThumbnailUrlFromAssetUrl(resourceItem.url, resourceItem.type);
       const resourceNode = mySchema.nodes.resource;
@@ -771,7 +781,7 @@ export function useEditor(
         : filteredResources.value[activeIndex.value];
 
       if (item) {
-        insertSelectedItem(item);
+        insertSelectedItem(item, menuType.value);
         return true;
       }
     }
