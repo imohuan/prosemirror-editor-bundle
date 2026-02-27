@@ -162,8 +162,6 @@ const mySchema = new Schema({
             "data-value": node.attrs.value,
           },
           `@${node.attrs.name}`,
-          // 添加零宽度空格作为光标锚点，解决 atom 节点在行尾时光标跳动问题
-          ["span", { class: "cursor-anchor" }, "\u200B"],
         ];
       },
       parseDOM: [
@@ -201,8 +199,6 @@ const mySchema = new Schema({
           },
           ["img", { src: imgSrc, draggable: "false", class: "object-cover" }],
           ["span", { class: "label" }, node.attrs.name],
-          // 添加零宽度空格作为光标锚点，解决 atom 节点在行尾时光标跳动问题
-          ["span", { class: "cursor-anchor" }, "\u200B"],
         ];
       },
       parseDOM: [
@@ -276,8 +272,8 @@ function createSelectionDecorationPlugin() {
   });
 }
 
-// 创建光标修复插件：解决 atom 节点在行尾时光标跳动问题
-// 使用 widget decoration 而不是插入实际文本，这样不会阻止删除操作
+// 创建光标修复插件：解决 atom 节点前后光标停靠问题
+// 在 atom 节点前后添加零宽度空格，确保光标可以停靠
 function createCursorFixPlugin() {
   return new Plugin({
     key: new PluginKey("cursor-fix"),
@@ -288,42 +284,71 @@ function createCursorFixPlugin() {
       apply(tr, set) {
         set = set.map(tr.mapping, tr.doc);
 
-        if (tr.docChanged) {
+        if (tr.docChanged || tr.selectionSet) {
           const decorations: Decoration[] = [];
           const doc = tr.doc;
 
           doc.descendants((node, pos) => {
-            if (node.type.name === "paragraph" && node.content.size > 0) {
-              // 找到段落中最后一个非空节点
-              let lastResourceEndPos = -1;
-
+            if (node.type.name === "paragraph") {
               let currentPos = pos + 1;
+
               for (let i = 0; i < node.childCount; i++) {
                 const child = node.child(i);
                 const childEnd = currentPos + child.nodeSize;
 
                 if (child.type.name === "resource" || child.type.name === "variable") {
-                  lastResourceEndPos = childEnd;
-                } else if (child.isText && child.text && child.text.replace(/\s/g, "").length > 0) {
-                  // 有实际内容的文本节点，重置
-                  lastResourceEndPos = -1;
+                  // 检查前面的节点
+                  const prevChild = i > 0 ? node.child(i - 1) : null;
+
+                  // 需要在前面添加占位符的情况：
+                  // 1. 段落开头（没有前置节点）
+                  // 2. 前面是空白文本
+                  // 3. 前面也是 resource/variable 节点（标签相邻）
+                  const needsBeforeWidget = !prevChild ||
+                    (prevChild.isText && (!prevChild.text || prevChild.text.trim() === "")) ||
+                    (prevChild.type.name === "resource" || prevChild.type.name === "variable");
+
+                  if (needsBeforeWidget) {
+                    decorations.push(
+                      Decoration.widget(currentPos, () => {
+                        const span = document.createElement("span");
+                        span.className = "cursor-widget-before";
+                        span.style.display = "inline";
+                        span.style.width = "0";
+                        span.contentEditable = "true";
+                        span.textContent = "\u200B";
+                        return span;
+                      }, { side: -1 }) // side: -1 表示在节点左侧
+                    );
+                  }
+
+                  // 检查后面的节点
+                  const nextChild = i < node.childCount - 1 ? node.child(i + 1) : null;
+
+                  // 需要在后面添加占位符的情况：
+                  // 1. 段落结尾（没有后续节点）
+                  // 2. 后面是空白文本
+                  // 3. 后面也是 resource/variable 节点（标签相邻）
+                  const needsAfterWidget = !nextChild ||
+                    (nextChild.isText && (!nextChild.text || nextChild.text.trim() === "")) ||
+                    (nextChild.type.name === "resource" || nextChild.type.name === "variable");
+
+                  if (needsAfterWidget) {
+                    decorations.push(
+                      Decoration.widget(childEnd, () => {
+                        const span = document.createElement("span");
+                        span.className = "cursor-widget-after";
+                        span.style.display = "inline";
+                        span.style.width = "0";
+                        span.contentEditable = "true";
+                        span.textContent = "\u200B";
+                        return span;
+                      }, { side: 1 }) // side: 1 表示在节点右侧
+                    );
+                  }
                 }
 
                 currentPos = childEnd;
-              }
-
-              // 如果段落以 resource 或 variable 结尾（后面没有实际内容）
-              if (lastResourceEndPos >= 0) {
-                // 在 resource 后面添加一个 widget 作为光标占位符
-                decorations.push(
-                  Decoration.widget(lastResourceEndPos, () => {
-                    const span = document.createElement("span");
-                    span.className = "cursor-widget";
-                    span.contentEditable = "false";
-                    span.appendChild(document.createTextNode("\u200B"));
-                    return span;
-                  }),
-                );
               }
             }
           });
@@ -829,7 +854,7 @@ export function useEditor(
 
               if (allVariables.length > 0 || allResources.length > 0) {
                 // 优先激活变量分类
-                showMenu({ left: coords.left, bottom: coords.bottom }, allVariables.length > 0 ? "variable" : "resource");
+                showMenu({ left: coords.left, top: coords.top, bottom: coords.bottom, right: coords.right }, allVariables.length > 0 ? "variable" : "resource");
               }
             } else if (textBefore) {
               const atIndex = textBefore.lastIndexOf("@");
@@ -848,12 +873,12 @@ export function useEditor(
 
                 if (matchedVariables.length > 0 || matchedResources.length > 0) {
                   // 优先激活有匹配结果的分类
-                  showMenu({ left: coords.left, bottom: coords.bottom }, matchedVariables.length > 0 ? "variable" : "resource");
+                  showMenu({ left: coords.left, top: coords.top, bottom: coords.bottom, right: coords.right }, matchedVariables.length > 0 ? "variable" : "resource");
                 } else if (allVariables.length > 0 || allResources.length > 0) {
                   // 如果都没有匹配，显示所有项
                   filteredVariables.value = allVariables;
                   filteredResources.value = allResources;
-                  showMenu({ left: coords.left, bottom: coords.bottom }, allVariables.length > 0 ? "variable" : "resource");
+                  showMenu({ left: coords.left, top: coords.top, bottom: coords.bottom, right: coords.right }, allVariables.length > 0 ? "variable" : "resource");
                 } else {
                   hideMenu();
                 }

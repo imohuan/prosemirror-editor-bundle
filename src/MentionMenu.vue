@@ -16,9 +16,12 @@
           class="menu-item variable-item"
           :class="{ active: index === activeIndex && menuType === 'variable' }"
           @mousedown.prevent="selectItem(item, 'variable')"
-          @mouseenter="$emit('hover', index, 'variable')"
         >
-          <span class="variable-icon">@</span>
+          <span class="variable-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M8 3C6.34 3 5 4.34 5 6v2c0 1.1-.9 2-2 2v2c1.1 0 2 .9 2 2v2c0 1.66 1.34 3 3 3h1v-2H8c-.55 0-1-.45-1-1v-2c0-1.3-.84-2.4-2-2.82.16-.42 1-1.52 2-2.82V6c0-.55.45-1 1-1h1V3H8zm8 0h-1v2h1c.55 0 1 .45 1 1v2c1.16 1.3 1.84 2.4 2 2.82-1.16.42-2 1.52-2 2.82v2c0 .55-.45 1-1 1h-1v2h1c1.66 0 3-1.34 3-3v-2c0-1.1.9-2 2-2v-2c-1.1 0-2-.9-2-2V6c0-1.66-1.34-3-3-3z"/>
+            </svg>
+          </span>
           <span class="text-sm">{{ item.name }}</span>
         </div>
       </div>
@@ -33,7 +36,6 @@
           class="menu-item"
           :class="{ active: index === activeIndex && menuType === 'resource' }"
           @mousedown.prevent="selectItem(item, 'resource')"
-          @mouseenter="$emit('hover', index, 'resource')"
         >
           <img
             :ref="(el) => setItemRef(el as HTMLImageElement, item)"

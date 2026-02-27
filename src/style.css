@@ -145,16 +145,16 @@
   border: 1px solid #e5e7eb;
   width: 200px;
   padding: 6px;
+  padding-right: 0px;
   max-height: 280px;
   overflow: hidden;
 }
 
 /* 自定义滚动条样式 */
 .mention-menu .menu-content {
-  max-height: 280px;
+  max-height: 268px;
   overflow-y: auto;
   overflow-x: hidden;
-  padding-right: 2px;
 }
 
 /* Firefox 滚动条 */
@@ -234,17 +234,17 @@
   justify-content: center;
   width: 24px;
   height: 24px;
-  background-color: #eff6ff;
   color: #2563eb;
-  border-radius: 4px;
-  font-weight: 600;
-  font-size: 14px;
   flex-shrink: 0;
 }
 
+.mention-menu .variable-item .variable-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
 .mention-menu .variable-item.active .variable-icon {
-  background-color: #2563eb;
-  color: #ffffff;
+  color: #2563eb;
 }
 
 /* 预览框样式 */
