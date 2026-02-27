@@ -15,6 +15,8 @@ export interface VariableItem {
 export interface MenuPosition {
   left: string;
   top: string;
+  origin?: string; // 动画原点，如 "top left", "bottom right"
+  side?: 'top' | 'bottom'; // 菜单显示在触发点的上方还是下方
 }
 
 export interface PreviewPosition {

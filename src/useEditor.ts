@@ -498,36 +498,36 @@ export function useEditor(
 
     menuVisible.value = true;
 
-    // 计算菜单位置，确保不超出视口
+    // 智能定位逻辑：预估菜单尺寸并进行边界检测
     const menuWidth = 200;
     const menuMaxHeight = 280;
-    const gap = 4;
+    const gap = 8; // 离触发点的偏移量
+    const minMargin = 8; // 最小边距
 
-    let left = coords.left;
-    let top = coords.bottom + gap;
+    let finalX = coords.left;
+    let finalY = coords.bottom + gap;
+    let originH = "left";
+    let originV = "top";
+    let side: 'top' | 'bottom' = "bottom";
 
-    // 检查右边界
-    if (left + menuWidth > window.innerWidth) {
-      left = window.innerWidth - menuWidth - 10;
+    // 水平边界检测
+    if (coords.left + menuWidth > window.innerWidth) {
+      finalX = coords.left - menuWidth; // 靠左显示
+      originH = "right";
     }
 
-    // 检查左边界
-    if (left < 10) {
-      left = 10;
-    }
-
-    // 检查底部边界，如果空间不足则显示在上方
-    if (top + menuMaxHeight > window.innerHeight) {
-      top = coords.top - menuMaxHeight - gap;
-      // 如果上方也不够，则显示在底部但调整高度
-      if (top < 10) {
-        top = coords.bottom + gap;
-      }
+    // 垂直边界检测
+    if (coords.bottom + menuMaxHeight + gap > window.innerHeight) {
+      finalY = coords.top - menuMaxHeight - gap; // 往上弹
+      originV = "bottom";
+      side = "top";
     }
 
     menuPosition.value = {
-      left: `${left}px`,
-      top: `${top}px`,
+      left: `${Math.max(minMargin, finalX)}px`,
+      top: `${Math.max(minMargin, finalY)}px`,
+      origin: `${originV} ${originH}`,
+      side: side,
     };
     activeIndex.value = 0;
   }

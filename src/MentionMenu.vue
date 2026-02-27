@@ -3,7 +3,7 @@
     v-show="visible" 
     ref="menuRef"
     class="mention-menu" 
-    :style="{ left: position.left, top: position.top }"
+    :style="dynamicStyle"
   >
     <div ref="contentRef" class="menu-content">
       <!-- 变量分类 -->
@@ -55,7 +55,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onUpdated, watch, nextTick } from "vue";
+import { ref, onUpdated, watch, nextTick, computed, onMounted } from "vue";
 import type { ResourceItem, VariableItem, MenuPosition } from "./types";
 import { loadImageWithThumbnail } from "./utils";
 
@@ -75,6 +75,13 @@ const emit = defineEmits<{
 
 const menuRef = ref<HTMLElement | null>(null);
 const contentRef = ref<HTMLElement | null>(null);
+
+// 计算动态样式
+const dynamicStyle = computed(() => ({
+  left: props.position.left,
+  top: props.position.top,
+  transformOrigin: props.position.origin || 'top left',
+}))
 
 // 存储菜单项元素的引用
 const menuItemRefs = new Map<string, HTMLElement>();
@@ -146,10 +153,43 @@ onUpdated(() => {
   });
 });
 
+// 入场动画
+onMounted(() => {
+  if (menuRef.value && props.visible) {
+    // 初始状态
+    menuRef.value.style.opacity = '0';
+    menuRef.value.style.transform = 'scale(0.95)';
+    
+    // 触发动画
+    requestAnimationFrame(() => {
+      if (menuRef.value) {
+        menuRef.value.style.transition = 'opacity 0.15s ease, transform 0.15s ease';
+        menuRef.value.style.opacity = '1';
+        menuRef.value.style.transform = 'scale(1)';
+      }
+    });
+  }
+});
+
 // 监听可见性变化
 watch(() => props.visible, (visible) => {
   if (visible) {
     nextTick(() => {
+      // 重置并触发入场动画
+      if (menuRef.value) {
+        menuRef.value.style.opacity = '0';
+        menuRef.value.style.transform = props.position.side === 'bottom' 
+          ? 'scale(0.95) translateY(-10px)' 
+          : 'scale(0.95) translateY(10px)';
+        
+        requestAnimationFrame(() => {
+          if (menuRef.value) {
+            menuRef.value.style.transition = 'opacity 0.2s ease, transform 0.2s ease';
+            menuRef.value.style.opacity = '1';
+            menuRef.value.style.transform = 'scale(1) translateY(0)';
+          }
+        });
+      }
       scrollToActiveItem();
     });
   }
