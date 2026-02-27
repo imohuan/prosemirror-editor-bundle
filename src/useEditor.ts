@@ -1,0 +1,771 @@
+import { ref, onMounted, onUnmounted, watch, type Ref, unref } from "vue";
+import { Schema } from "prosemirror-model";
+import { EditorState, Plugin, PluginKey } from "prosemirror-state";
+import { EditorView, Decoration, DecorationSet } from "prosemirror-view";
+import { schema as baseSchema } from "prosemirror-schema-basic";
+import { keymap } from "prosemirror-keymap";
+import { baseKeymap } from "prosemirror-commands";
+import { history, undo, redo } from "prosemirror-history";
+import type { ResourceItem } from "./types";
+import { isVideoUrl, getThumbnailUrlFromAssetUrl, loadImageWithThumbnail } from "./utils";
+
+// 拖拽参考线插件配置
+interface DropCursorOptions {
+  color?: string;
+  width?: number;
+  class?: string;
+}
+
+// 创建拖拽参考线插件
+function createDropCursorPlugin(options: DropCursorOptions = {}) {
+  const { color = "#2b6df2", width = 2, class: className = "drop-cursor" } = options;
+
+  let dropElement: HTMLDivElement | null = null;
+  let currentPos: number | null = null;
+
+  function createDropElement(): HTMLDivElement {
+    const el = document.createElement("div");
+    el.className = className;
+    el.style.cssText = `
+      position: absolute;
+      background-color: ${color};
+      pointer-events: none;
+      z-index: 1000;
+      transition: opacity 0.15s ease;
+    `;
+    el.style.display = "none";
+    return el;
+  }
+
+  function showCursor(view: EditorView, pos: number, horizontal: boolean) {
+    if (!dropElement) {
+      dropElement = createDropElement();
+      document.body.appendChild(dropElement);
+    }
+
+    if (currentPos === pos) return;
+    currentPos = pos;
+
+    const coords = view.coordsAtPos(pos);
+    const editorRect = view.dom.getBoundingClientRect();
+
+    if (horizontal) {
+      // 横向参考线（用于块级元素或行间插入）
+      dropElement.style.width = `${editorRect.width}px`;
+      dropElement.style.height = `${width}px`;
+      dropElement.style.left = `${editorRect.left + window.scrollX}px`;
+      dropElement.style.top = `${coords.top + window.scrollY - width / 2}px`;
+    } else {
+      // 竖向参考线（用于行内插入位置）
+      dropElement.style.width = `${width}px`;
+      dropElement.style.height = `${coords.bottom - coords.top}px`;
+      dropElement.style.left = `${coords.left + window.scrollX - width / 2}px`;
+      dropElement.style.top = `${coords.top + window.scrollY}px`;
+    }
+
+    dropElement.style.display = "block";
+  }
+
+  function hideCursor() {
+    if (dropElement) {
+      dropElement.style.display = "none";
+    }
+    currentPos = null;
+  }
+
+  function destroyCursor() {
+    if (dropElement && dropElement.parentNode) {
+      dropElement.parentNode.removeChild(dropElement);
+    }
+    dropElement = null;
+  }
+
+  return new Plugin({
+    key: new PluginKey("drop-cursor"),
+    view(editorView) {
+      const view = editorView;
+
+      function handleDragover(event: DragEvent) {
+        const pos = view.posAtCoords({ left: event.clientX, top: event.clientY });
+
+        if (pos) {
+          // 判断是行内还是块级位置
+          const $pos = view.state.doc.resolve(pos.pos);
+          const isInlinePosition = $pos.parent.inlineContent;
+
+          showCursor(view, pos.pos, !isInlinePosition);
+          event.preventDefault();
+        } else {
+          hideCursor();
+        }
+      }
+
+      function handleDragleave() {
+        hideCursor();
+      }
+
+      function handleDrop() {
+        hideCursor();
+      }
+
+      function handleDragend() {
+        hideCursor();
+      }
+
+      function handleDragstart(event: DragEvent) {
+        // 设置拖拽图像，让元素左上角对齐鼠标位置
+        if (event.dataTransfer && event.target) {
+          const target = event.target as HTMLElement;
+          // 设置偏移为 (0, 0)，使元素左上角对齐鼠标
+          event.dataTransfer.setDragImage(target, 0, 0);
+        }
+      }
+
+      view.dom.addEventListener("dragover", handleDragover as any);
+      view.dom.addEventListener("dragleave", handleDragleave);
+      view.dom.addEventListener("drop", handleDrop);
+      view.dom.addEventListener("dragstart", handleDragstart as any);
+      document.addEventListener("dragend", handleDragend);
+
+      return {
+        destroy() {
+          view.dom.removeEventListener("dragover", handleDragover as any);
+          view.dom.removeEventListener("dragleave", handleDragleave);
+          view.dom.removeEventListener("drop", handleDrop);
+          view.dom.removeEventListener("dragstart", handleDragstart as any);
+          document.removeEventListener("dragend", handleDragend);
+          destroyCursor();
+        },
+      };
+    },
+  });
+}
+
+
+
+// Schema 定义
+const mySchema = new Schema({
+  nodes: baseSchema.spec.nodes.append({
+    resource: {
+      attrs: { id: {}, url: {}, name: {}, thumbnail_url: { default: "" } },
+      group: "inline",
+      inline: true,
+      selectable: true,
+      draggable: true,
+      atom: true,
+      toDOM: (node) => {
+        // 对于视频，使用缩略图作为 img src；对于图片，直接使用 url
+        const thumbnailUrl = node.attrs.thumbnail_url || getThumbnailUrlFromAssetUrl(node.attrs.url);
+        const imgSrc = thumbnailUrl || node.attrs.url;
+        return [
+          "span",
+          {
+            class: "resource-node",
+            "data-id": node.attrs.id,
+            "data-url": node.attrs.url,
+            "data-name": node.attrs.name,
+          },
+          ["img", { src: imgSrc, draggable: "false", class: "object-cover" }],
+          ["span", { class: "label" }, node.attrs.name],
+          // 添加零宽度空格作为光标锚点，解决 atom 节点在行尾时光标跳动问题
+          ["span", { class: "cursor-anchor" }, "\u200B"],
+        ];
+      },
+      parseDOM: [
+        {
+          tag: "span.resource-node",
+          getAttrs: (dom) => {
+            const el = dom as HTMLElement;
+            const id = el.getAttribute("data-id") || "";
+            const url = el.getAttribute("data-url") || "";
+            const name = el.getAttribute("data-name") || "";
+            // 根据资源URL自动拼接缩略图URL
+            const thumbnailUrl = getThumbnailUrlFromAssetUrl(url);
+
+            return {
+              id,
+              url,
+              name,
+              thumbnail_url: thumbnailUrl,
+            };
+          },
+        },
+      ],
+    },
+  }),
+});
+
+// 创建选中装饰插件
+function createSelectionDecorationPlugin() {
+  return new Plugin({
+    key: new PluginKey("selection-decoration"),
+    state: {
+      init() {
+        return DecorationSet.empty;
+      },
+      apply(tr, set, _oldState, newState) {
+        set = set.map(tr.mapping, tr.doc);
+
+        if (tr.selectionSet || tr.docChanged) {
+          const { selection, doc } = newState;
+          const decorations: Decoration[] = [];
+
+          doc.descendants((node, pos) => {
+            if (node.type.name === "resource") {
+              const nodeFrom = pos;
+              const nodeTo = pos + node.nodeSize;
+              const isInSelection = selection.from <= nodeFrom && selection.to >= nodeTo;
+              const isNodeSelection = (selection as any).node && selection.from === nodeFrom;
+
+              if (isInSelection || isNodeSelection) {
+                decorations.push(
+                  Decoration.node(nodeFrom, nodeTo, {
+                    class: "resource-node-selected",
+                  }),
+                );
+              }
+            }
+          });
+
+          set = DecorationSet.create(doc, decorations);
+        }
+
+        return set;
+      },
+    },
+    props: {
+      decorations(state) {
+        return this.getState(state);
+      },
+    },
+  });
+}
+
+// 创建光标修复插件：解决 atom 节点在行尾时光标跳动问题
+// 使用 widget decoration 而不是插入实际文本，这样不会阻止删除操作
+function createCursorFixPlugin() {
+  return new Plugin({
+    key: new PluginKey("cursor-fix"),
+    state: {
+      init() {
+        return DecorationSet.empty;
+      },
+      apply(tr, set) {
+        set = set.map(tr.mapping, tr.doc);
+
+        if (tr.docChanged) {
+          const decorations: Decoration[] = [];
+          const doc = tr.doc;
+
+          doc.descendants((node, pos) => {
+            if (node.type.name === "paragraph" && node.content.size > 0) {
+              // 找到段落中最后一个非空节点
+              let lastResourceEndPos = -1;
+
+              let currentPos = pos + 1;
+              for (let i = 0; i < node.childCount; i++) {
+                const child = node.child(i);
+                const childEnd = currentPos + child.nodeSize;
+
+                if (child.type.name === "resource") {
+                  lastResourceEndPos = childEnd;
+                } else if (child.isText && child.text && child.text.replace(/\s/g, "").length > 0) {
+                  // 有实际内容的文本节点，重置
+                  lastResourceEndPos = -1;
+                }
+
+                currentPos = childEnd;
+              }
+
+              // 如果段落以 resource 结尾（后面没有实际内容）
+              if (lastResourceEndPos >= 0) {
+                // 在 resource 后面添加一个 widget 作为光标占位符
+                decorations.push(
+                  Decoration.widget(lastResourceEndPos, () => {
+                    const span = document.createElement("span");
+                    span.className = "cursor-widget";
+                    span.contentEditable = "false";
+                    span.appendChild(document.createTextNode("\u200B"));
+                    return span;
+                  }),
+                );
+              }
+            }
+          });
+
+          return DecorationSet.create(doc, decorations);
+        }
+
+        return set;
+      },
+    },
+    props: {
+      decorations(state) {
+        return this.getState(state);
+      },
+    },
+  });
+}
+
+// 粘贴处理插件
+function createPasteHandlerPlugin() {
+  return new Plugin({
+    key: new PluginKey("paste-handler"),
+    props: {
+      handlePaste(view, event) {
+        const html = event.clipboardData?.getData("text/html");
+        if (html && html.includes("resource-node")) {
+          return false;
+        }
+
+        const text = event.clipboardData?.getData("text/plain");
+        if (text && !html) {
+          const cleanedText = text.replace(/\n+/g, " ").trim();
+          const { from, to } = view.state.selection;
+          const tr = view.state.tr.replaceWith(from, to, view.state.schema.text(cleanedText));
+          view.dispatch(tr);
+          return true;
+        }
+
+        return false;
+      },
+    },
+  });
+}
+
+export function useEditor(
+  editorRef: Ref<HTMLElement | null>,
+  props: {
+    modelValue?: Ref<string | undefined>;
+    resources?: Ref<ResourceItem[] | undefined>;
+  },
+  emit: {
+    (e: "update:modelValue", value: string): void;
+    (e: "resource-insert", resource: ResourceItem): void;
+  },
+) {
+  let view: EditorView | null = null;
+  let mutationObserver: MutationObserver | null = null;
+
+  // 菜单状态
+  const menuVisible = ref(false);
+  const menuPosition = ref({ left: "0px", top: "0px" });
+  const activeIndex = ref(0);
+  const mentionQuery = ref("");
+
+  // 预览状态
+  const previewVisible = ref(false);
+  const previewUrl = ref("");
+  const previewTitle = ref("");
+  const previewType = ref<"image" | "video">("image");
+  const previewPosition = ref<{ left: string; top: string; transform?: string }>({ left: "0px", top: "0px" });
+
+  // 全屏预览状态
+  const fullscreenVisible = ref(false);
+  const fullscreenUrl = ref("");
+  const fullscreenType = ref<"image" | "video">("image");
+
+  // 计时器
+  let hoverTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // 过滤后的资源
+  const filteredResources = ref<ResourceItem[]>([]);
+
+  // 获取纯文本
+  function getPlainText(): string {
+    if (!view) return "";
+    let text = "";
+    view.state.doc.descendants((node) => {
+      if (node.type.name === "resource") {
+        text += `@${node.attrs.name} `;
+      } else if (node.isText) {
+        // 过滤掉零宽空格（用于修复光标问题）
+        text += node.text?.replace(/\u200B/g, "") || "";
+      } else if (node.isBlock && text.length > 0) {
+        text += "\n";
+      }
+    });
+    return text.trim();
+  }
+
+  // 显示菜单
+  function showMenu(coords: { left: number; bottom: number }) {
+    filteredResources.value = unref(props.resources) || [];
+    menuVisible.value = true;
+    menuPosition.value = {
+      left: `${coords.left}px`,
+      top: `${coords.bottom + window.scrollY + 4}px`,
+    };
+    activeIndex.value = 0;
+  }
+
+  // 隐藏菜单
+  function hideMenu() {
+    menuVisible.value = false;
+    mentionQuery.value = "";
+    filteredResources.value = [];
+  }
+
+  // 插入选中的资源
+  function insertSelectedItem(item: ResourceItem) {
+    if (!view) return;
+    const { from } = view.state.selection;
+    // 使用统一的缩略图计算逻辑
+    const thumbnailUrl = item.thumbnail_url || getThumbnailUrlFromAssetUrl(item.url, item.type);
+    const resourceNode = mySchema.nodes.resource;
+    if (!resourceNode) return;
+    const tr = view.state.tr.replaceWith(
+      from - 1 - mentionQuery.value.length,
+      from,
+      resourceNode.create({
+        id: item.id,
+        url: item.url,
+        name: item.name,
+        thumbnail_url: thumbnailUrl,
+      }),
+    );
+    tr.insertText(" ");
+    view.dispatch(tr);
+    hideMenu();
+    view.focus();
+    emit("resource-insert", item);
+  }
+
+  // 处理菜单悬停
+  function handleMenuHover(index: number) {
+    activeIndex.value = index;
+  }
+
+  // 处理资源节点鼠标进入
+  function handleResourceMouseEnter(node: HTMLElement) {
+    const isSelected = node.classList.contains("ProseMirror-selectednode") || node.classList.contains("resource-node-selected");
+
+    if (isSelected) return;
+
+    if (hoverTimer) clearTimeout(hoverTimer);
+
+    hoverTimer = setTimeout(() => {
+      const url = node.getAttribute("data-url") || "";
+      const name = node.getAttribute("data-name") || "";
+
+      if (!url) return;
+
+      const isVideoFile = isVideoUrl(url);
+
+      previewUrl.value = url;
+      // previewTitle.value = `${isVideoFile ? "视频" : "图片"} ${name}`;
+      previewTitle.value = name;
+      previewType.value = isVideoFile ? "video" : "image";
+
+      const rect = node.getBoundingClientRect();
+      const margin = 12;
+      const previewMaxWidth = 400;
+
+      // 水平居中：标签中心点 - 预览框宽度的一半
+      let left = rect.left + rect.width / 2;
+
+      // 默认显示在标签下方
+      let top = rect.bottom + margin;
+
+      // 边缘检测：如果超出视口右边界，调整 left
+      if (left + previewMaxWidth / 2 > window.innerWidth) {
+        left = window.innerWidth - previewMaxWidth / 2 - 10;
+      }
+      // 边缘检测：如果超出视口左边界
+      if (left - previewMaxWidth / 2 < 0) {
+        left = previewMaxWidth / 2 + 10;
+      }
+
+      // 垂直方向：如果下方空间不足，显示在标签上方
+      const spaceBelow = window.innerHeight - rect.bottom;
+      if (spaceBelow < 200) {
+        top = rect.top - margin;
+        // 标记为显示在上方（用于 CSS 调整）
+        previewPosition.value = {
+          left: `${left}px`,
+          top: `${top}px`,
+          transform: "translateX(-50%) translateY(-100%)",
+        };
+      } else {
+        previewPosition.value = {
+          left: `${left}px`,
+          top: `${top}px`,
+          transform: "translateX(-50%)",
+        };
+      }
+
+      previewVisible.value = true;
+    }, 500);
+  }
+
+  // 处理资源节点鼠标离开
+  function handleResourceMouseLeave() {
+    if (hoverTimer) {
+      clearTimeout(hoverTimer);
+      hoverTimer = null;
+    }
+    previewVisible.value = false;
+  }
+
+  // 处理资源节点点击
+  function handleResourceClick(node: HTMLElement) {
+    const url = node.getAttribute("data-url") || "";
+    if (!url) return;
+
+    fullscreenUrl.value = url;
+    fullscreenType.value = isVideoUrl(url) ? "video" : "image";
+    fullscreenVisible.value = true;
+  }
+
+  // 关闭全屏预览
+  function closeFullscreen() {
+    fullscreenVisible.value = false;
+  }
+
+  // 存储资源节点图片的取消加载函数
+  const resourceCleanupMap = new WeakMap<HTMLImageElement, () => void>();
+
+  // 绑定资源节点事件
+  function bindResourceEvents() {
+    const resourceNodes = document.querySelectorAll(".resource-node");
+    resourceNodes.forEach((node) => {
+      const el = node as HTMLElement;
+      el.onmouseenter = () => handleResourceMouseEnter(el);
+      el.onmouseleave = handleResourceMouseLeave;
+      el.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        handleResourceClick(el);
+      };
+
+      // 处理缩略图加载
+      const img = el.querySelector("img");
+      if (img) {
+        const assetUrl = el.getAttribute("data-url") || "";
+        const assetName = el.getAttribute("data-name") || "";
+        const assetId = el.getAttribute("data-id") || "";
+        
+        // 清理之前的加载
+        const oldCleanup = resourceCleanupMap.get(img);
+        if (oldCleanup) oldCleanup();
+        
+        // 使用新的加载方式
+        const resourceItem: ResourceItem = {
+          id: assetId,
+          url: assetUrl,
+          name: assetName,
+        };
+        const cleanup = loadImageWithThumbnail(img, resourceItem, true);
+        resourceCleanupMap.set(img, cleanup);
+      }
+    });
+  }
+
+  // 键盘上移
+  function moveUp() {
+    if (!menuVisible.value) return false;
+    activeIndex.value = (activeIndex.value - 1 + filteredResources.value.length) % filteredResources.value.length;
+    return true;
+  }
+
+  // 键盘下移
+  function moveDown() {
+    if (!menuVisible.value) return false;
+    activeIndex.value = (activeIndex.value + 1) % filteredResources.value.length;
+    return true;
+  }
+
+  // 键盘确认
+  function handleEnter() {
+    if (menuVisible.value && filteredResources.value.length > 0) {
+      const item = filteredResources.value[activeIndex.value];
+      if (item) {
+        insertSelectedItem(item);
+      }
+      return true;
+    }
+    return false;
+  }
+
+  // 初始化编辑器
+  onMounted(() => {
+    if (!editorRef.value) return;
+
+    const mentionKeymap = keymap({
+      ArrowUp: () => moveUp(),
+      ArrowDown: () => moveDown(),
+      Enter: () => handleEnter(),
+      "Shift-Enter": (state, dispatch) => {
+        const hardBreak = state.schema.nodes.hard_break;
+        if (!hardBreak) return false;
+        if (dispatch) {
+          dispatch(state.tr.replaceSelectionWith(hardBreak.create()).scrollIntoView());
+        }
+        return true;
+      },
+      Escape: () => {
+        if (!menuVisible.value) return false;
+        hideMenu();
+        return true;
+      },
+      "Mod-z": () => {
+        if (menuVisible.value) return false;
+        return undo(view?.state || ({} as any), view?.dispatch);
+      },
+      "Mod-y": () => {
+        if (menuVisible.value) return false;
+        return redo(view?.state || ({} as any), view?.dispatch);
+      },
+      "Mod-Shift-z": () => {
+        if (menuVisible.value) return false;
+        return redo(view?.state || ({} as any), view?.dispatch);
+      },
+    });
+
+    const initialValue = unref(props.modelValue);
+    const state = EditorState.create({
+      schema: mySchema,
+      doc: mySchema.node("doc", null, [mySchema.node("paragraph", null, initialValue ? [mySchema.text(initialValue)] : [])]),
+      plugins: [
+        history(),
+        mentionKeymap,
+        createSelectionDecorationPlugin(),
+        createPasteHandlerPlugin(),
+        createCursorFixPlugin(),
+        createDropCursorPlugin({ color: "#2b6df2", width: 2 }),
+        keymap(baseKeymap),
+      ],
+    });
+
+    view = new EditorView(editorRef.value, {
+      state,
+      dispatchTransaction(transaction) {
+        if (!view) return;
+        const newState = view.state.apply(transaction);
+        view.updateState(newState);
+
+        emit("update:modelValue", getPlainText());
+
+        const sel = newState.selection;
+        if (sel.empty && (sel as any).$cursor) {
+          const $cursor = (sel as any).$cursor;
+          const nodeBefore = $cursor.nodeBefore;
+          if (nodeBefore && nodeBefore.isText) {
+            const textBefore = nodeBefore.text;
+            if (textBefore && textBefore.endsWith("@")) {
+              mentionQuery.value = "";
+              const coords = view.coordsAtPos(sel.from);
+              showMenu({ left: coords.left, bottom: coords.bottom });
+            } else if (textBefore) {
+              const atIndex = textBefore.lastIndexOf("@");
+              if (atIndex !== -1) {
+                mentionQuery.value = textBefore.slice(atIndex + 1);
+                const allResources = unref(props.resources) || [];
+                filteredResources.value = allResources.filter((r) => r.name.toLowerCase().includes(mentionQuery.value.toLowerCase()));
+                const coords = view.coordsAtPos(sel.from);
+                showMenu({ left: coords.left, bottom: coords.bottom });
+              } else {
+                hideMenu();
+              }
+            } else {
+              hideMenu();
+            }
+          } else {
+            hideMenu();
+          }
+        } else {
+          hideMenu();
+        }
+      },
+      clipboardTextSerializer: (slice) => {
+        let text = "";
+        slice.content.forEach((node) => {
+          if (node.type.name === "resource") {
+            text += `@${node.attrs.name} `;
+          } else if (node.isText) {
+            // 过滤掉零宽空格
+            text += node.text?.replace(/\u200B/g, "") || "";
+          } else if (node.isBlock) {
+            text += "\n";
+          }
+        });
+        return text;
+      },
+    });
+
+    // 监听 DOM 变化
+    mutationObserver = new MutationObserver(() => {
+      bindResourceEvents();
+    });
+
+    mutationObserver.observe(editorRef.value, {
+      childList: true,
+      subtree: true,
+    });
+
+    bindResourceEvents();
+  });
+
+  onUnmounted(() => {
+    if (mutationObserver) {
+      mutationObserver.disconnect();
+    }
+    if (hoverTimer) {
+      clearTimeout(hoverTimer);
+    }
+    if (view) {
+      view.destroy();
+    }
+  });
+
+  // 监听外部 modelValue 变化
+  watch(
+    () => unref(props.modelValue),
+    (newValue) => {
+      if (view && getPlainText() !== newValue) {
+        const tr = view.state.tr;
+        tr.delete(0, view.state.doc.content.size);
+        if (newValue) {
+          tr.insert(0, mySchema.text(newValue));
+        }
+        view.dispatch(tr);
+      }
+    },
+  );
+
+  // 监听 resources 变化，更新过滤列表
+  watch(
+    () => unref(props.resources),
+    (newResources) => {
+      if (menuVisible.value && newResources) {
+        if (mentionQuery.value) {
+          filteredResources.value = newResources.filter((r) => r.name.toLowerCase().includes(mentionQuery.value.toLowerCase()));
+        } else {
+          filteredResources.value = newResources;
+        }
+      }
+    },
+    { deep: true },
+  );
+
+  return {
+    // 菜单
+    menuVisible,
+    menuPosition,
+    activeIndex,
+    filteredResources,
+    insertSelectedItem,
+    handleMenuHover,
+    // 预览
+    previewVisible,
+    previewUrl,
+    previewTitle,
+    previewType,
+    previewPosition,
+    // 全屏预览
+    fullscreenVisible,
+    fullscreenUrl,
+    fullscreenType,
+    closeFullscreen,
+  };
+}
