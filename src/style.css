@@ -3,19 +3,20 @@
   outline: none !important;
   min-height: 120px;
   font-size: 16px;
-  line-height: 1.5;
+  line-height: 24px;
   color: #111;
 }
 
 /* 变量标签基础样式 */
 .prose-mirror-editor .variable-node {
-  display: inline;
+  display: inline-block;
   padding: 0 4px !important;
   cursor: default;
   user-select: none;
   vertical-align: baseline;
   font-size: 0.95em;
   position: relative;
+  height: 24px;
 }
 
 /* 变量标签内层样式 - 提供背景和圆角 */
