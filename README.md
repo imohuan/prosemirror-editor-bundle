@@ -1,5 +1,7 @@
 # Vue 组件打包为 Web Component 的完整过程
 
+![截图说明](./截图说明.png)
+
 ## 1. 项目初始化
 
 创建了独立的打包项目 `prosemirror-editor-bundle`，使用 Vite + pnpm 作为构建工具。
